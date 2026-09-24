@@ -61,3 +61,5 @@ Wrap async handlers with `src/lib/asyncHandler.js`. Parse query params with `src
 - `POST /api/files/download` takes the `/api/files/materials` response `items` + `outputDownloadPath`, no DB query.
   barcodeId/originalname come from the caller: validate barcodeId, reduce originalname to a safe basename.
 - Downloads are written to disk only inside `DOWNLOAD_ROOT` (`.part` then rename). Never let a request path escape it.
+- `POST /api/files/download/zip` takes the same `items` + the searched `scanId`; returns `<scanId>.zip` (yazl), no disk.
+  Every `items[].scanId` must contain `scanId`.

@@ -21,9 +21,13 @@ function get(url) {
   });
 }
 
+function getMaterial(material) {
+  return get(process.env.GRAPH_MATERIAL_URL + encodeURIComponent(material));
+}
+
 // Writes to a .part file first so a failed download never leaves a truncated image; rename overwrites.
 async function downloadMaterial(material, destPath) {
-  const res = await get(process.env.GRAPH_MATERIAL_URL + encodeURIComponent(material));
+  const res = await getMaterial(material);
   const tmp = `${destPath}.part`;
   try {
     await pipe(res, fs.createWriteStream(tmp));
@@ -35,4 +39,12 @@ async function downloadMaterial(material, destPath) {
   return (await fs.promises.stat(destPath)).size;
 }
 
-module.exports = { downloadMaterial };
+// Reads the whole image into memory (for zips); a dropped connection rejects instead of returning a partial buffer.
+async function fetchMaterial(material) {
+  const res = await getMaterial(material);
+  const chunks = [];
+  for await (const chunk of res) chunks.push(chunk);
+  return Buffer.concat(chunks);
+}
+
+module.exports = { downloadMaterial, fetchMaterial };

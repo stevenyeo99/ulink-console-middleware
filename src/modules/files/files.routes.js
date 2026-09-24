@@ -1,4 +1,5 @@
 const path = require('path');
+const { pipeline } = require('stream');
 const express = require('express');
 const asyncHandler = require('../../lib/asyncHandler');
 const { str, parsePaging, scanIdFilter, barcodeIdFilter } = require('../../lib/query');
@@ -49,21 +50,28 @@ function parseItems(items) {
       seen.add(m.material);
       materials.push({ material: m.material, originalname: typeof m.originalname === 'string' ? m.originalname : '' });
     }
-    parsed.push({ barcodeId: filter.barcodeId, materials });
+    parsed.push({ barcodeId: filter.barcodeId, scanId: str(item.scanId), materials });
   }
   return parsed;
 }
 
-router.post('/download', asyncHandler(async (req, res) => {
-  const body = req.body || {};
+// Shared body checks for both download endpoints; returns { items } or { error }.
+function readItems(body) {
   const items = parseItems(body.items);
   if (!items) {
-    return res.status(400).json({ error: 'items must be the /materials response items: [{ barcodeId, materials: [{ material, originalname }] }]' });
+    return { error: 'items must be the /materials response items: [{ barcodeId, materials: [{ material, originalname }] }]' };
   }
   const total = items.reduce((n, i) => n + i.materials.length, 0);
   if (total > MAX_MATERIALS) {
-    return res.status(400).json({ error: `At most ${MAX_MATERIALS} materials per request (got ${total})` });
+    return { error: `At most ${MAX_MATERIALS} materials per request (got ${total})` };
   }
+  return { items };
+}
+
+router.post('/download', asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const { items, error } = readItems(body);
+  if (error) return res.status(400).json({ error });
 
   const outputDir = resolveOutputDir(body.outputDownloadPath);
   if (!outputDir) {
@@ -71,6 +79,29 @@ router.post('/download', asyncHandler(async (req, res) => {
   }
 
   res.json(await service.downloadMaterials(items, outputDir));
+}));
+
+// Same input as /download plus the scanId the caller searched with; responds with <scanId>.zip, nothing saved on disk.
+router.post('/download/zip', asyncHandler(async (req, res) => {
+  const body = req.body || {};
+  const scanId = str(body.scanId);
+  if (!scanIdFilter(scanId)) {
+    return res.status(400).json({ error: 'scanId must be 3-64 chars of letters, digits, _ or -' });
+  }
+  const { items, error } = readItems(body);
+  if (error) return res.status(400).json({ error });
+  // Keeps the zip name honest: every submission in it must belong to the scan it's named after.
+  const stray = items.find((i) => !i.scanId.includes(scanId));
+  if (stray) {
+    return res.status(400).json({ error: `items[].scanId must contain ${scanId} (barcode ${stray.barcodeId} does not)` });
+  }
+
+  const { zip, items: results } = await service.zipMaterials(items, scanId);
+  if (!zip) return res.status(502).json({ error: 'No materials could be downloaded', items: results });
+
+  res.set({ 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="${scanId}.zip"` });
+  // pipeline stops the zip stream if the client disconnects; headers are sent, so there is nothing else to report.
+  pipeline(zip.outputStream, res, () => {});
 }));
 
 module.exports = router;
