@@ -1,8 +1,7 @@
-const fs = require('fs');
 const path = require('path');
 const db = require('../../lib/db');
 const yazl = require('yazl');
-const { downloadMaterial, fetchMaterial } = require('./files.graph');
+const { fetchMaterial } = require('./files.graph');
 
 // Submissions matching filter, newest first, each with its materials' fs.files details.
 async function listMaterials(filter, { skip, limit }) {
@@ -62,29 +61,6 @@ function fileNames(materials) {
   });
 }
 
-// Downloads each item's materials into <outputDir>/<barcodeId>/<originalname>, overwriting existing files.
-// items are shaped like listMaterials() output: [{ barcodeId, materials: [{ material, originalname }] }].
-async function downloadMaterials(items, outputDir) {
-  const out = [];
-  for (const item of items) {
-    const dir = path.join(outputDir, item.barcodeId);
-    await fs.promises.mkdir(dir, { recursive: true });
-
-    const results = [];
-    // ponytail: sequential downloads; add limited concurrency if large batches get slow.
-    for (const { material, name } of fileNames(item.materials)) {
-      const file = path.join(dir, name);
-      try {
-        results.push({ material, status: 'saved', file, bytes: await downloadMaterial(material, file) });
-      } catch (err) {
-        results.push({ material, status: 'failed', error: err.message });
-      }
-    }
-    out.push({ barcodeId: item.barcodeId, outputDir: dir, results });
-  }
-  return { items: out };
-}
-
 // Fetches each item's materials into a zip laid out as <scanId>/<barcodeId>/<name>; failed images are left out.
 // Returns { zip: null, items } with per-material results when nothing was fetched, so the caller can answer 502.
 // ponytail: whole batch held in memory (<= 100 images) before sending; stream entries if the limit grows.
@@ -112,4 +88,4 @@ async function zipMaterials(items, scanId) {
   return { zip };
 }
 
-module.exports = { listMaterials, downloadMaterials, zipMaterials };
+module.exports = { listMaterials, zipMaterials };

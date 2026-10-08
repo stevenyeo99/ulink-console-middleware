@@ -1,6 +1,6 @@
 require('dotenv').config();
 
-const missing = ['MONGO_URL', 'GRAPH_MATERIAL_URL', 'DOWNLOAD_ROOT'].filter((k) => !process.env[k]);
+const missing = ['MONGO_URL', 'GRAPH_MATERIAL_URL'].filter((k) => !process.env[k]);
 if (missing.length) {
   console.error(`Missing env: ${missing.join(', ')}`);
   process.exit(1);

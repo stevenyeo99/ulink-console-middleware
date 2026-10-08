@@ -14,10 +14,10 @@ This middleware joins the two so a caller can get a scan's images in three steps
 
 1. **Find** the submissions for a scan id (`GET /api/barcodes`)
 2. **List** their images (`GET /api/files/materials`)
-3. **Download** them as `<scanId>.zip` (`POST /api/files/download/zip`), or save them on the server
-   (`POST /api/files/download`)
+3. **Download** them as `<scanId>.zip` (`POST /api/files/download/zip`)
 
-It is used by the ULINK console and by third parties who need a scan's pages. It never writes to MongoDB.
+It is used by the ULINK console and by third parties who need a scan's pages. It never writes to MongoDB or to
+the local disk.
 
 Full endpoint reference and the end-to-end download workflow: [docs/samples/API.md](docs/samples/API.md).
 
@@ -56,12 +56,11 @@ cp .env.example .env         # then fill in the values below
 | `MONGO_USER` | yes | | Read-only MongoDB user |
 | `MONGO_PASS` | yes | | Its password |
 | `GRAPH_MATERIAL_URL` | yes | `https://iasconsole-graph.ulinkmyanmar.com.mm/claim/material/` | Prefix; the material id is appended |
-| `DOWNLOAD_ROOT` | yes | `/mnt/c/client/ulink/console/downloads/IN` | Folder for `POST /api/files/download`; nothing is written outside it |
 
 - `.env` is gitignored. Never commit credentials or copy them into code or docs.
 - **WSL:** if MongoDB runs on the Windows host, `127.0.0.1` may not reach it from WSL. Use the Windows host IP
   instead (e.g. `172.28.144.1`).
-- The server exits at startup if `MONGO_URL`, `GRAPH_MATERIAL_URL` or `DOWNLOAD_ROOT` is missing, or if MongoDB
+- The server exits at startup if `MONGO_URL` or `GRAPH_MATERIAL_URL` is missing, or if MongoDB
   can't be reached.
 
 ## Running
@@ -100,8 +99,8 @@ src/
 └── modules/
     ├── barcodes/             GET /api/barcodes
     └── files/
-        ├── files.routes.js   GET /materials, POST /download, POST /download/zip (request validation)
-        ├── files.service.js  MongoDB lookups, save-to-disk and zip building
+        ├── files.routes.js   GET /materials, POST /download/zip (request validation)
+        ├── files.service.js  MongoDB lookups and zip building
         └── files.graph.js    fetches material images from the graph service
 docs/samples/
 ├── API.md                    endpoint reference and download workflow

@@ -1,4 +1,3 @@
-const path = require('path');
 const { pipeline } = require('stream');
 const express = require('express');
 const asyncHandler = require('../../lib/asyncHandler');
@@ -25,16 +24,6 @@ router.get('/materials', asyncHandler(async (req, res) => {
 const MATERIAL = /^[A-Za-z0-9]{16,128}$/;
 const MAX_MATERIALS = 100;
 
-// Resolves outputDownloadPath (relative, or absolute inside DOWNLOAD_ROOT); null if it escapes the root.
-function resolveOutputDir(value) {
-  const p = str(value);
-  if (!p) return null;
-  const root = path.resolve(process.env.DOWNLOAD_ROOT);
-  const full = path.resolve(root, p);
-  const rel = path.relative(root, full);
-  return rel.startsWith('..') || path.isAbsolute(rel) ? null : full;
-}
-
 // Accepts the /materials response items; keeps only the fields needed and rejects anything malformed.
 function parseItems(items) {
   if (!Array.isArray(items) || !items.length) return null;
@@ -55,7 +44,7 @@ function parseItems(items) {
   return parsed;
 }
 
-// Shared body checks for both download endpoints; returns { items } or { error }.
+// Body checks for the download endpoint; returns { items } or { error }.
 function readItems(body) {
   const items = parseItems(body.items);
   if (!items) {
@@ -68,20 +57,7 @@ function readItems(body) {
   return { items };
 }
 
-router.post('/download', asyncHandler(async (req, res) => {
-  const body = req.body || {};
-  const { items, error } = readItems(body);
-  if (error) return res.status(400).json({ error });
-
-  const outputDir = resolveOutputDir(body.outputDownloadPath);
-  if (!outputDir) {
-    return res.status(400).json({ error: 'outputDownloadPath must be inside DOWNLOAD_ROOT' });
-  }
-
-  res.json(await service.downloadMaterials(items, outputDir));
-}));
-
-// Same input as /download plus the scanId the caller searched with; responds with <scanId>.zip, nothing saved on disk.
+// The /materials response items plus the scanId the caller searched with; responds with <scanId>.zip, nothing saved on disk.
 router.post('/download/zip', asyncHandler(async (req, res) => {
   const body = req.body || {};
   const scanId = str(body.scanId);

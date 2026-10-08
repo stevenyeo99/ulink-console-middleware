@@ -13,7 +13,6 @@ from the graph service, either to the server's disk or as a zip file in the resp
 | GET | [`/health`](#get-health) | Liveness check |
 | GET | [`/api/barcodes`](#get-apibarcodes) | Barcodes of submissions whose scanId contains a value |
 | GET | [`/api/files/materials`](#get-apifilesmaterials) | Materials (images) of submissions, by scanId or barcodeId |
-| POST | [`/api/files/download`](#post-apifilesdownload) | Download materials to a folder under `DOWNLOAD_ROOT` |
 | POST | [`/api/files/download/zip`](#post-apifilesdownloadzip) | Download materials as a zip file in the response |
 
 See [Workflow: downloading materials](#workflow-downloading-materials) for the end-to-end steps.
@@ -87,11 +86,6 @@ link can't send a POST body).
 - At most **100 images** per request. For more, split the `items` across several requests.
 - Images are fetched one at a time (about 0.5 s each), and the zip is sent once all are fetched, so 100 images
   take about 50 s. Set the client timeout to at least 2 minutes.
-
-### Saving on the server instead
-For internal jobs that need the files on the server, post the same step 2 response to
-[`POST /api/files/download`](#post-apifilesdownload) with `outputDownloadPath` instead of `scanId`. Files land in
-`<DOWNLOAD_ROOT>/<outputDownloadPath>/<barcodeId>/`, and the JSON response lists each image's status.
 
 ---
 
@@ -258,118 +252,10 @@ curl "http://localhost:3023/api/files/materials?barcodeId=VSQ9N14552"
 
 ---
 
-## POST /api/files/download
-
-Downloads material images from the graph service (`GRAPH_MATERIAL_URL` + material id) and saves them on the
-**server** at:
-
-```
-<DOWNLOAD_ROOT>/<outputDownloadPath>/<barcodeId>/<originalname>
-```
-
-The request body is the `/api/files/materials` response plus `outputDownloadPath`. The API does not query MongoDB.
-To download only some images, remove the others from `materials` before posting.
-
-### Request body
-| Field | Type | Required | Description |
-|---|---|---|---|
-| `outputDownloadPath` | string | yes | Folder relative to `DOWNLOAD_ROOT` (an absolute path is accepted only if it's inside `DOWNLOAD_ROOT`). Created if missing. |
-| `items` | array | yes | At least 1 item |
-| `items[].barcodeId` | string | yes | Used as the sub-folder name. Must pass the `barcodeId` rule. |
-| `items[].materials` | array | yes | At least 1 material per item |
-| `items[].materials[].material` | string | yes | Material id |
-| `items[].materials[].originalname` | string | no | File name to save as. Defaults to the material id. |
-
-- **Limit:** at most **100 materials** in total across all items.
-- **Ignored fields:** `scanId`, `createdAt`, `contentType`, `length`, `uploadDate`, `missing`, `hasMore`, and any others.
-- **Duplicates:** a material listed twice in the same item is downloaded once.
-
-```bash
-curl -X POST http://localhost:3023/api/files/download \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "items": [
-      {
-        "barcodeId": "VSQ9N14552",
-        "materials": [
-          { "material": "ec4Uw5yawSHi0a6u1sErWzaYeXmI0erDt1puf1VLIpDtaPgWQNbKHxqpj15PqXo5", "originalname": "page-000.jpg" },
-          { "material": "qOYLs9vguVEYpPaH4AgmmokseKUtk1pbeA9eVh8PZ8laePXGJtddbkhjgc2q3pHj", "originalname": "page-001.jpg" }
-        ]
-      }
-    ],
-    "outputDownloadPath": "batch-01"
-  }'
-```
-
-Chaining the two calls (list, then download everything listed):
-```bash
-curl -s "http://localhost:3023/api/files/materials?scanId=26034880" \
-  | node -pe 'JSON.stringify({ ...JSON.parse(require("fs").readFileSync(0)), outputDownloadPath: "batch-01" })' \
-  | curl -s -X POST http://localhost:3023/api/files/download -H 'Content-Type: application/json' -d @-
-```
-
-### Response 200
-Returned when the request is valid, even if some or all downloads failed. Check each `status`.
-
-| Field | Type | Description |
-|---|---|---|
-| `items[].barcodeId` | string | Barcode from the request |
-| `items[].outputDir` | string | Absolute folder the files were written to |
-| `items[].results[].material` | string | Material id |
-| `items[].results[].status` | `"saved"` \| `"failed"` | Outcome for this material |
-| `items[].results[].file` | string | Absolute path of the saved file (`saved` only) |
-| `items[].results[].bytes` | integer | Size written (`saved` only) |
-| `items[].results[].error` | string | Reason (`failed` only), e.g. `graph returned HTTP 404`, `graph request timed out` |
-
-```json
-{
-  "items": [
-    {
-      "barcodeId": "VSQ9N14552",
-      "outputDir": "/mnt/c/client/ulink/console/downloads/IN/batch-01/VSQ9N14552",
-      "results": [
-        {
-          "material": "ec4Uw5yawSHi0a6u1sErWzaYeXmI0erDt1puf1VLIpDtaPgWQNbKHxqpj15PqXo5",
-          "status": "saved",
-          "file": "/mnt/c/client/ulink/console/downloads/IN/batch-01/VSQ9N14552/page-000.jpg",
-          "bytes": 121719
-        },
-        {
-          "material": "AAAAAAAAAAAAAAAAAAAAAAAA",
-          "status": "failed",
-          "error": "graph returned HTTP 404"
-        }
-      ]
-    }
-  ]
-}
-```
-
-### Behaviour
-- **Overwrite:** existing files with the same name are replaced.
-- **No partial files:** each image is written to `<name>.part` and renamed when complete. A failed download leaves nothing behind.
-- **Failures don't stop the batch:** each material is attempted even if earlier ones fail.
-- **Order and timing:** downloads run one at a time. Each graph request times out after 30 s. The response is sent when all downloads have finished (about 0.5 s per image).
-- **File names:** `originalname` is reduced to a plain file name:
-  - folder parts are removed (`../../x.jpg` → `x.jpg`)
-  - characters other than letters, digits, `.`, `_`, `-` become `_`
-  - an empty name, `.` or `..` falls back to the material id
-  - if two materials in one item end up with the same name, the second is saved as `<material>-<name>`
-- **Trust:** `barcodeId` and `originalname` are taken from the request and not checked against MongoDB. A wrong `barcodeId` puts the images in the wrong folder, but never outside `DOWNLOAD_ROOT`.
-
-### Errors
-| Status | `error` |
-|---|---|
-| 400 | `items must be the /materials response items: [{ barcodeId, materials: [{ material, originalname }] }]` (missing or empty `items`/`materials`, invalid `barcodeId` or `material`, or `materials` given as plain strings) |
-| 400 | `At most 100 materials per request (got N)` |
-| 400 | `outputDownloadPath must be inside DOWNLOAD_ROOT` (missing, or resolves outside it, e.g. `../x` or `/tmp`) |
-
----
-
 ## POST /api/files/download/zip
 
-Same as [`/api/files/download`](#post-apifilesdownload), but the images are returned as **one zip file** in the
-response instead of being saved on the server. Nothing is written to disk.
+Downloads material images from the graph service (`GRAPH_MATERIAL_URL` + material id) and returns them as
+**one zip file** in the response. Nothing is written to disk, and the API does not query MongoDB.
 
 The request body is the `/api/files/materials?scanId=...` response plus the `scanId` you searched with. That
 `scanId` names the zip and its top folder:
@@ -389,7 +275,16 @@ API-AYA-CL-26034880.zip
 |---|---|---|---|
 | `scanId` | string | yes | The scanId searched with, e.g. `API-AYA-CL-26034880`. 3-64 letters, digits, `_` or `-`. |
 | `items[].scanId` | string | yes | Full scanId from the materials response. Must **contain** `scanId`. |
-| `items`, `items[].barcodeId`, `items[].materials[]...` | | | Same as `/api/files/download` (same 100-material limit, duplicates, file names) |
+| `items` | array | yes | At least 1 item |
+| `items[].barcodeId` | string | yes | Used as the folder name in the zip. Must pass the `barcodeId` rule. |
+| `items[].materials` | array | yes | At least 1 material per item |
+| `items[].materials[].material` | string | yes | Material id |
+| `items[].materials[].originalname` | string | no | File name in the zip. Defaults to the material id. |
+
+- **Limit:** at most **100 materials** in total across all items.
+- **Ignored fields:** `createdAt`, `contentType`, `length`, `uploadDate`, `missing`, `hasMore`, and any others.
+- **Duplicates:** a material listed twice in the same item is downloaded once.
+- To download only some images, remove the others from `materials` before posting.
 
 ```bash
 curl -s "http://localhost:3023/api/files/materials?scanId=API-AYA-CL-26034880" \
@@ -417,8 +312,13 @@ Every image failed. The body lists the reason per image:
 ```
 
 ### Behaviour
-- **Timing:** all images are downloaded (one at a time, as with `/download`) before the zip is sent, so the
-  response starts after about 0.5 s per image.
+- **Timing:** all images are downloaded one at a time before the zip is sent, so the response starts after about
+  0.5 s per image. Each graph request times out after 30 s; a failed image doesn't stop the others.
+- **File names:** `originalname` is reduced to a plain file name:
+  - folder parts are removed (`../../x.jpg` → `x.jpg`)
+  - characters other than letters, digits, `.`, `_`, `-` become `_`
+  - an empty name, `.` or `..` falls back to the material id
+  - if two materials in one item end up with the same name, the second is saved as `<material>-<name>`
 - **Images are stored uncompressed** in the zip; JPEGs don't shrink further.
 - **Trust:** `scanId`, `barcodeId` and `originalname` come from the request and are not checked against MongoDB.
 
@@ -427,7 +327,8 @@ Every image failed. The body lists the reason per image:
 |---|---|
 | 400 | `scanId must be 3-64 chars of letters, digits, _ or -` |
 | 400 | `items[].scanId must contain <scanId> (barcode <barcodeId> does not)` |
-| 400 | Same `items` and limit errors as `/api/files/download` |
+| 400 | `items must be the /materials response items: [{ barcodeId, materials: [{ material, originalname }] }]` (missing or empty `items`/`materials`, invalid `barcodeId` or `material`, or `materials` given as plain strings) |
+| 400 | `At most 100 materials per request (got N)` |
 | 502 | `No materials could be downloaded`, with the per-material results in `items` |
 
 ---
@@ -441,9 +342,8 @@ Every image failed. The body lists the reason per image:
 | `MONGO_USER` | yes | `airead` | Read-only MongoDB user |
 | `MONGO_PASS` | yes | | Its password |
 | `GRAPH_MATERIAL_URL` | yes | `https://iasconsole-graph.ulinkmyanmar.com.mm/claim/material/` | Prefix; the material id is appended |
-| `DOWNLOAD_ROOT` | yes | `/mnt/c/client/ulink/console/downloads/IN` | Every download is written inside this folder |
 
-The server exits at startup if `MONGO_URL`, `GRAPH_MATERIAL_URL` or `DOWNLOAD_ROOT` is missing, or if MongoDB
+The server exits at startup if `MONGO_URL` or `GRAPH_MATERIAL_URL` is missing, or if MongoDB
 can't be reached.
 
 ## Running
